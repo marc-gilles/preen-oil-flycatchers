@@ -1,0 +1,18 @@
+variable,description
+sample,preen oil sample ID
+nestbox,nestbox ID/pair ID
+nestbox_factor,nestbox ID/pair ID (as a factor)
+ringnr,ring number/individual ID
+may_date,May date
+may_date_factor,May date (as a factor)
+daystohatch,number of days relative to hatching date
+breeding_stage,breeding stage (Before: before hatching/incubation; After: after hatching/chick rearing)
+sex,sex (Female; Male)
+sampletime,time of day of sampling
+morning_afternoon,whether sampling was conducted in the morning or the afternoon (Morning; Afternoon)
+completepair_d1,whether both partners of the pair were sampled succesfully (complete dataset); sample used for the analyses of sex and pair differences (complete dataset) (0: no; 1: yes)
+completepair_d2,whether both partners of the pair were sampled succesfully (reduced dataset); sample used for the analyses of sex and pair differences (reduced dataset) (0: no; 1: yes)
+femalesampledtwice_d1,whether a female was sampled successfully both during incubation and during chick rearing (complete dataset); sample used for the analyses of breeding stage and individual differences (complete dataset) (0: no; 1: yes)
+femalesampledtwice_d2,whether a female was sampled successfully both during incubation and during chick rearing (reduced dataset); sample used for the analyses of breeding stage and individual differences (reduced dataset) (0: no; 1: yes)
+quality_chrom,whether the chromatogram contain preen oil substances after visual inspection of the chromatogram (bad: no preen oil substance; good: preen oil substances) 
+lowconcentration,whether the abundance of the most abundant substance (proxy of preen oil concentration in the sample) is lower than the threshold of 70000 (0: no; 1: yes)

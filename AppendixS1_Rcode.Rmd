@@ -1,0 +1,904 @@
+---
+title: |
+  | **Preen oil composition of Pied Flycatchers is similar between partners but differs between sexes and breeding stages**
+  |
+  | R code
+author: "*M. Gilles, R.W. Fokkema, P. Korsten, B.A. Caspers & T. Schmoll*"
+output: 
+  pdf_document: 
+    toc: true # to generate a table of contents
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    latex_engine: xelatex
+  html_document: default
+header-includes: 
+ \usepackage{float}
+ \floatplacement{figure}{H} # for the position of figures/plots
+---
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE) 
+# settings for the whole documents: no message and no warning will be displayed
+```
+
+>
+
+Required packages
+
+```{r results='hide'}
+library(GCalignR) # to align chromatograms
+library(vegan) # to calculate chemical richness and diversity
+library(dplyr) # for manipulation of data sets
+library(ggplot2) # for plotting
+library(lme4) # to run linear mixed models
+library(lmerTest) # to run linear mixed models and get p-values from mixed models
+library(rptR) # to get repeatabilities from mixed models
+library(broom.mixed) # to get confidence intervals from mixed models
+library(partR2) # to get R2 and confidence intervals of fixed effects from mixed models
+library(performance) # for model diagnostics
+library(qqplotr) # so that package performance can work completly
+library(lattice) # for data visualization
+library(pracma) # to get x for a specifc y from the cumulative abundance curve
+library(tidyverse)
+```
+
+# Data
+
+```{r, echo=FALSE}
+# set working directory
+setwd("C:/Users/localadmin/Documents/PhD SMELLY PLOVERS/PF1/publication/data and code")
+```
+
+## Metadata
+
+Import and prepare metadata
+```{r, results="hide"}
+# import metadata
+metadata<-read.csv("raw_metadata.csv")
+
+# set sampleIDs as row names
+metadata <- data.frame(metadata, row.names = 1)
+
+# make factors of variables not yet designated as factors
+str(metadata)
+metadata$ringnr<-as.factor(metadata$ringnr)
+metadata$sampletime<-as.factor(metadata$sampletime)
+str(metadata)
+
+# change order of levels in factors
+metadata$breeding_stage <- factor(metadata$breeding_stage, levels = c("Before", "After"))
+```
+
+## Chemical data
+
+### Alignment
+
+Find optimal reference sample
+```{r}
+choose_optimal_reference("raw_chemdata.txt", rt_col_name = "RT")
+```
+
+Prepare a vector with the name of the GC control samples ("DCM_") and environmental control samples ("LI") (substances detected in GC control samples and environmental control samples will be removed during the alignment)
+
+```{r}
+blanks.and.controls <- c("DCM_026","DCM_101","DCM_76","LI106","LI71","LI90","LI133")
+```
+
+Alignment
+
+*Note that the alignment procedure can take a while (a few hours maximum).*
+
+```{r, cache=TRUE, results='hide'}
+aligned <- align_chromatograms(
+               data = "raw_chemdata.txt", 
+               # raw chromatographic data
+               rt_col_name = "RT", 
+               reference = "LI150", 
+               # obtained from the function 'choose_optimal_reference()'
+               blanks = blanks.and.controls, 
+               # delete substances detected in control samples
+               delete_single_peak = TRUE, 
+               # delete substances detected in one sample only 
+               remove_empty = TRUE, 
+               # remove empty samples 
+               max_linear_shift = 0, 
+               # expected linear drift
+               max_diff_peak2mean = 0.025, 
+               # allowed RT difference of a peak with the mean of the corresponding row
+               min_diff_peak2peak = 0.05,
+               # expected minimum RT difference among homologous substances 
+               permute = F, 
+               # keep the order of samples constant between different alignments
+               write_output = c("area"))
+```
+
+*After the alignment, a text file called "raw_chemdata_area" containing the aligned data is created in the working directory.*
+
+Summary of the alignment procedure
+```{r}
+print(aligned) 
+```
+
+Diagnostic plots
+```{r}
+plot(aligned,which_plot = "all")
+```
+
+Heatmap of aligned chromatographic data
+```{r}
+gc_heatmap(aligned,threshold = 0.03) 
+```
+
+Save the aligned chromatographic data
+```{r}
+save(aligned, file = "aligned_chromdata.RData")
+```
+
+Load the aligned chromatohraphic data
+```{r, results = "hide"}
+# automatic method
+aligned 
+```
+
+```{r, results="hide"}
+# manual method (load the data from the txt file created by GCalignR)
+chemdata.manual <- read.table("raw_chemdata_area.txt",header = F)
+samplenames <- chemdata.manual[1,] 
+rownames(chemdata.manual) <- as.matrix(chemdata.manual[,1]) 
+chemdata.manual <- chemdata.manual[,-1] 
+colnames(chemdata.manual) <- as.matrix(chemdata.manual[1,]) 
+chemdata.manual <- chemdata.manual[-1,]
+chemdata.manual <- as.data.frame(t(chemdata.manual)) 
+str(chemdata.manual)
+chemdata.num <- data.frame(lapply(chemdata.manual, 
+                                  function(x) as.numeric(as.character(x)))) 
+str(chemdata.num)
+chemdata.num$sample <- t(samplenames)[-1,] 
+chemdata.num[names(chemdata.num)=='sample']
+chemdata.num <- chemdata.num[,c(which(colnames(chemdata.num)=="sample"),
+                                which(colnames(chemdata.num)!="sample"))]
+rownames(chemdata.num) <- as.matrix(chemdata.num[,1])
+chemdata.num <- chemdata.num[,-1] 
+chemdata.manual <- chemdata.num 
+```
+
+*In total, 98 samples were aligned and 119 substances were detected.*
+
+### Transformation
+
+Standardise to get the relative abundances of substances within each sample
+```{r, results="hide"}
+chemdata.norm <- norm_peaks(aligned, conc_col_name = "area",rt_col_name = "RT",
+                            out = "data.frame") # proportions range between 0 und 100 (%)
+```
+
+Log-transform (log(x+1)) relative abundances to increase the weight of the numerous low-abundance substances and decrease the weight of the few high-abundance substances
+```{r, results="hide"}
+chemdata <- log(chemdata.norm + 1)
+```
+
+Make sure that dataframes 'chemdata' and 'metadata' have the same rows
+```{r, results="hide"}
+metadata <- metadata[rownames(metadata) %in% rownames(chemdata),] 
+chemdata <- chemdata[rownames(chemdata) %in% rownames(metadata),] 
+chemdata <- chemdata[match(rownames(metadata),rownames(chemdata)),] 
+```
+
+
+### Abundance of most common substance
+
+Find the most common substance
+```{r, results="hide"} 
+max(colSums(chemdata.manual != 0))
+colSums(chemdata.manual != 0) 
+```
+
+*The substance with a retention time of 17.41 min is the most common substance (present in 91 samples).*
+
+Get the abundance of the most common substance for each sample 
+```{r, results="hide"} 
+abundance_mostcommonpeak <- chemdata.manual[,"X17.4091868131868", drop = F] 
+colnames(abundance_mostcommonpeak) <- c("abundance_mostcommonpeak") 
+```
+
+Add it to the metadata
+```{r, results="hide"} 
+metadata <- merge(metadata, abundance_mostcommonpeak, by = 0)
+rownames(metadata) <- as.matrix(metadata[,1])
+metadata <- metadata[,-1]
+```
+
+*We will use the abundance of the most common substance as a proxy of the concentration of the samples.*
+
+
+### Richness and diversity
+
+Calculate richness (S)
+```{r, results="hide"}
+S <- specnumber(chemdata)
+```
+
+Calculate Shannon diversity (H)
+```{r, results="hide"}
+H <- diversity(chemdata)
+```
+
+Add richness and diversity to the metadata
+```{r,results="hide"}
+sampleID <- rownames(chemdata)
+diversity <- data.frame(S = S, H = H)
+diversity <- diversity[match(rownames(metadata),rownames(diversity)),]
+metadata <- cbind(metadata,diversity)
+```
+
+### Volatility
+
+Calculate the cumulative abundance curve for each sample
+```{r,results="hide"}
+prop.cum.abundances <- t(apply(chemdata.norm, 1, cumsum))
+```
+
+Example of the cumulative abundance curve of one sample
+```{r, fig.height=3}
+RT <- as.numeric(colnames(prop.cum.abundances))
+prop <- prop.cum.abundances["LI150",] # sample LI150
+data.plot <- data.frame(RT, prop)
+theme_set(theme_classic())
+ggplot(data = data.plot, aes(x = RT, y = prop))+
+  geom_line(data = data.plot, aes(x = RT, y = prop))+
+  scale_x_continuous(n.breaks = 8)+
+  labs(x = "Retention time (min)", y = "Proportion of abundance (%)")+
+  theme(axis.text = element_text(size = 11),
+        axis.title = element_text(size = 12))
+```
+
+Get the proportion of the chromatograms before RT = 15.58 min ("high-volatility substances") and after RT = 17.41 min ("low-volatility substances")
+```{r,results="hide"}
+volatility <- prop.cum.abundances[,c("15.3931194029851", "17.4091868131868"), drop = F]
+# we use peak 15.39 to have the cumulative abundance BEFORE peak 15.58
+# we use peak 16.50 to have the cumulative abundance AFTER peak 17.41
+colnames(volatility) <- c("prop.cum.ab.15.39","prop.cum.ab.17.41")
+volatility <- as.data.frame(volatility)
+volatility$prop.highvolatility <- volatility$prop.cum.ab.15.39
+volatility$prop.lowvolatility <- 100-volatility$prop.cum.ab.17.41
+volatility <- volatility[,-c(1,2)]
+```
+
+Add it to the metadata
+```{r,results="hide"}
+metadata <- merge(metadata, volatility, by = 0)
+rownames(metadata) <- as.matrix(metadata[,1])
+metadata <- metadata[,-1] 
+```
+
+## Data selection
+
+### Samples without preen oil
+
+Remove samples with chromatograms similar those from blank samples (suggesting that no preen oil was collected)
+```{r}
+# take only samples with "good" chromatograms (i.e. do not resemble blanks)
+metadata <- metadata[metadata$quality_chrom == "good",] 
+metadata$quality_chrom <- droplevels(metadata$quality_chrom)
+nrow(metadata)
+```
+
+*21 samples do not contain preen oil and are discarded. 77 samples are retained for the analysis.*
+
+### Samples with low concentration
+
+Some samples seem to have a limited richness/diversity. These samples appear too be not concentrated enough for low abundance substances to be detected, resulting in a lower richness/diversity (concentration bias).
+
+Plot Shannon diversity against the concentration (abundance of the most common substance) of the samples
+```{r}
+plot(metadata$H~metadata$abundance_mostcommonpeak, pch = 19, cex = 0.5,
+     col=metadata$quality_chrom, ylab = "Shannon diversity", 
+     xlab = "Abundance of the most common substance")
+abline(v=70000, col="black")
+```
+
+*The curved pattern shows that diversity drops below a threshold of concentration (abundance of the most common peak = 70000). We consider that samples below that value are "low-concentration" samples and reflect poorly the chemical composition of the preen oil they contain (non-detection of low-abundance substances, underestimated diversity/richness).*
+
+```{r}
+metadata.lowconc <- metadata[metadata$abundance_mostcommonpea < 70000,]
+nrow(metadata.lowconc)
+```
+*In total, 16 samples appear to have a low concentration of preen oil (abundance of the most common peak < 70000).*
+
+PERMANOVA analyses will be conducted on two data sets:
+
+> - data set 1 (complete) contains all the samples (77 samples)
+
+> - data set 2 (reduced) contains only the samples that have a good concentration (i.e. most common sustance > 70000) (61 samples)
+
+GLMM analyses will be conducted on the reduced data set only, because we used diversity to find a selection threshold, and should therefore not compare the results (e.g. differences in diversity) obtained with the complete data set to those obtained with reduced data set.
+
+### Data for sex and pair analysis
+
+We include only complete pairs (i.e. where both the female and the male were sampled) in order to have a perfectly balanced design.
+
+Subset data to keep only samples during nestling rearing from complete pairs (female and male)
+```{r}
+data.sex <- metadata
+data.sex <- data.sex[data.sex$breeding_stage == "After",] 
+data.sex <- data.sex[ ave(1:nrow(data.sex), data.sex$nestbox_factor, 
+                          FUN=length) > 1 , ]
+data.sex$nestbox_factor <- droplevels(data.sex$nestbox_factor)
+```
+
+Data set 1 (complete)
+```{r}
+data.sex.1 <- data.sex
+table(data.sex.1$sex)
+```
+
+```{r, echo=FALSE}
+# make chemical data and metadata consistent (same rows)
+data.sex.1 <- data.sex.1[rownames(data.sex.1) %in% rownames(chemdata),] 
+chemdata.sex.1 <- chemdata[rownames(chemdata) %in% rownames(data.sex.1),] 
+chemdata.sex.1 <- chemdata.sex.1[match(rownames(data.sex.1),rownames(chemdata.sex.1)),] 
+```
+
+*N = 34 samples from 17 pairs (17 females and 17 males)*
+
+
+Data set 2 (reduced)
+```{r}
+data.sex.2 <- data.sex[data.sex$abundance_mostcommonpeak > 70000,] 
+data.sex.2 <- data.sex.2[ ave(1:nrow(data.sex.2), data.sex.2$nestbox_factor, 
+                              FUN=length) > 1 , ]
+data.sex.2$nestbox_factor <- droplevels(data.sex.2$nestbox_factor)
+table(data.sex.2$sex)
+```
+
+```{r, echo=FALSE}
+# make chemical data and metadata consistent (same rows)
+data.sex.2 <- data.sex.2[rownames(data.sex.2) %in% rownames(chemdata),] 
+chemdata.sex.2 <- chemdata[rownames(chemdata) %in% rownames(data.sex.2),] 
+chemdata.sex.2 <- chemdata.sex.2[match(rownames(data.sex.2),rownames(chemdata.sex.2)),]
+```
+
+*N = 22 samples from 11 pairs (11 females and 11 males)*
+
+
+### Data for season and individual analysis
+
+We include only females that were sampled twice (i.e. druing incubation and during nestling rearing) in order to have a perfectly balanced design.
+
+Subset data to keep only samples from females that were sampled twice (during incubation and during nestling rearing)
+```{r}
+data.season <- metadata
+data.season <- data.season[data.season$sex == "Female",]
+data.season <- data.season[ ave(1:nrow(data.season), data.season$ringnr, 
+                                FUN=length) > 1 , ]
+data.season$ringnr <- droplevels(data.season$ringnr)
+```
+
+Data set 1 (complete)
+```{r}
+data.season.1 <- data.season 
+table(data.season.1$breeding_stage)
+```
+
+```{r, echo=FALSE}
+# make chemical data and metadata consistent (same rows)
+data.season.1 <- data.season.1[rownames(data.season.1) %in% rownames(chemdata),] 
+chemdata.season.1 <- chemdata[rownames(chemdata) %in% rownames(data.season.1),] 
+chemdata.season.1 <- chemdata.season.1[match(rownames(data.season.1),
+                                             rownames(chemdata.season.1)),] 
+```
+
+*N = 24 samples from 12 females sampled twice (12 during incubation and 12 during nestling rearing)*
+
+Data set 2 (reduced)
+```{r}
+data.season.2 <-  data.season[data.season$abundance_mostcommonpeak > 70000,] 
+data.season.2 <- data.season.2[ ave(1:nrow(data.season.2), data.season.2$ringnr, 
+                                    FUN=length) > 1 , ]
+data.season.2$ringnr <- droplevels(data.season.2$ringnr)
+table(data.season.2$breeding_stage)
+```
+
+```{r, echo=FALSE}
+# make chemical data and metadata consistent (same rows)
+data.season.2 <- data.season.2[rownames(data.season.2) %in% rownames(chemdata),] 
+chemdata.season.2 <- chemdata[rownames(chemdata) %in% rownames(data.season.2),] 
+chemdata.season.2 <- chemdata.season.2[match(rownames(data.season.2),
+                                             rownames(chemdata.season.2)),] 
+```
+
+*N = 16 samples from 8 females sampled twice (8 during incubation and 8 during nestling rearing)*
+
+### Concentration differences between groups
+
+We have noted that samples vary in their concentration in preen oil (proxy: abundance of the most common substance), and that preen oil concentration affect chromatographic data, with low-concentration samples having less substances and lower diversity. Before testing for differences between groups (females vs males, incubation vs nestling rearing, pairs, individuals) in preen oil composition (dissimilarity matrix, richness, diversity, volatility), we should make sure that there is no difference between groups in concentration. If there is, it would mean that the difference in preen oil composition observed may simply be due to the concentration bias.
+
+For sex and breeding stage differences in concentration, we use Wilcoxon rank sum tests. To test for differences in concentration among pairs and individuals, we use Spearman correlation tests. We use non-parametric tests because the assumptions of normality and homoscedasticity were not met.
+
+
+Difference in concentration between sexes
+```{r}
+# complete data set
+wilcox.test(abundance_mostcommonpeak ~ sex, data = data.sex.1)
+# reduced data set
+wilcox.test(abundance_mostcommonpeak ~ sex, data = data.sex.2)
+```
+
+*No difference between male and female samples (in both data sets with complete pairs)*
+
+Difference in concentration between breeding stages
+```{r}
+# complete data set
+wilcox.test(abundance_mostcommonpeak ~ breeding_stage, data = data.season.1)
+# reduced data set
+wilcox.test(abundance_mostcommonpeak ~ breeding_stage, data = data.season.2)
+```
+
+*No difference between incubation and nestling rearing samples (in both data sets with females sampled twice)*
+
+Difference in concentration among pairs
+```{r}
+# complete data set
+# data about pairs and concentration
+data.sex.1.conc.pairs <- data.sex.1[,c(2,8,17)] 
+# convert in horizontal format
+data.sex.1.conc.pairs <- spread(data.sex.1.conc.pairs, sex, abundance_mostcommonpeak) 
+# correlation test
+cor.test(data.sex.1.conc.pairs$Female,
+         data.sex.1.conc.pairs$Male, 
+         method = "spearman")
+```
+
+```{r}
+# reduced data set
+# data about pairs and concentration
+data.sex.2.conc.pairs <- data.sex.2[,c(2,8,17)] 
+# convert in horizontal format
+data.sex.2.conc.pairs <- spread(data.sex.2.conc.pairs, sex, abundance_mostcommonpeak) 
+# correlation test
+cor.test(data.sex.2.conc.pairs$Female,
+         data.sex.2.conc.pairs$Male, 
+         method = "spearman")
+```
+
+*The concentrations in samples from males and females from the same pair are correlated*
+
+Difference in concentration among individuals
+```{r}
+# complete data set
+# data about individuals and concentration
+data.season.1.conc.ind <- data.season.1[,c(3,7,17)] 
+# convert in horizontal format
+data.season.1.conc.ind <- spread(data.season.1.conc.ind, breeding_stage, 
+                                 abundance_mostcommonpeak) 
+# correlation test
+cor.test(data.season.1.conc.ind$Before,
+         data.season.1.conc.ind$After, 
+         method = "spearman")
+
+# reduced data set
+# data about ind and concentration
+data.season.2.conc.ind <- data.season.2[,c(3,7,17)] 
+# convert in horizontal format
+data.season.2.conc.ind <- spread(data.season.2.conc.ind, breeding_stage, 
+                                 abundance_mostcommonpeak) 
+# correlation test
+cor.test(data.season.2.conc.ind$Before,
+         data.season.2.conc.ind$After, 
+         method = "spearman")
+```
+
+*No correlation in the concentration of preen oil in the samples of the same individual*
+
+
+# Analysis
+
+First, we test for differences in the overall composition of preen oil with permutational multivariate analyses of variance (PERMANOVA) using PRIMER software. These analyses are not detailed in this document. 
+
+Second, we test for differences in richness (number of substances), diversity (Shannon index) and volatility (proportion of high-volatility substances and proportion of low-volatility substances) of preen oil. To do so, we run generalized linear mixed models (GLMM) with Gaussian distribution and identity link using the *lmer* function of the *lme4* package. For fixed effects, we look at the bêta estimates and their 95% confidence intervals. Fixed effects are significant (alpha = 5%) if the confidence interval does not span 0. In addition, we run the model with the *lmerTest* package to get a P-value. We use the *partR2* package to get the ,arginal R2 of the fixed effects and the *rptR* package to get the repeatability (adjusted repeatability using the LMM method) of the random effects. *rptR* also provides a P-value (based on permutations) for the random effects.
+
+## Sex and pair analysis
+
+We test for sex differences within pairs (during nestling rearing).
+
+### Richness (S)
+
+Fit the model
+```{r}
+glmm.sex.S <- lme4::lmer(S ~ sex + (1|nestbox_factor), data = data.sex.2)
+summary(glmm.sex.S)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.sex.S, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(S ~ sex + (1|nestbox_factor), data = data.sex.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.sex.S, nboot = 1000)
+```
+
+Get the repeatability (with confidence interval) of the random effect
+```{r}
+rpt(S ~ sex + (1|nestbox_factor), 
+                 grname = "nestbox_factor", 
+                 data = data.sex.2, datatype = "Gaussian", 
+                 nboot = 1000, npermut = 1000, 
+                 adjusted = TRUE)
+```
+
+Check the model assumptions
+```{r}
+check_model(glmm.sex.S) 
+```
+
+### Diversity (H)
+
+Fit the model
+```{r}
+glmm.sex.H <- lme4::lmer(H ~ sex + (1|nestbox_factor), data = data.sex.2)
+summary(glmm.sex.H)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.sex.H, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(H ~ sex + (1|nestbox_factor), data = data.sex.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.sex.H, nboot = 1000)
+```
+
+Get the repeatability (with cofidence interval) of the random effect
+```{r}
+rpt(H ~ sex + (1|nestbox_factor), 
+                 grname = "nestbox_factor", 
+                 data = data.sex.2, datatype = "Gaussian", 
+                 nboot = 1000, npermut = 1000, 
+                 adjusted = TRUE)
+```
+
+Check the model assumptions
+```{r}
+check_model(glmm.sex.H)
+```
+
+Control for concentration
+```{r}
+summary(lmerTest::lmer(H ~ abundance_mostcommonpeak + sex +
+                                    (1|nestbox_factor), data = data.sex.2))
+```
+
+Boxplot of sex difference (within pairs) in diversity 
+```{r}
+theme_set(theme_classic())
+plot.H.sex <- ggplot(data = data.sex.2, aes(x=sex, y=H)) +
+  geom_point(data = data.sex.2, size = 1.3, shape = 16,alpha = .8, 
+             position = position_dodge(width = 0), show.legend = T,) +
+  geom_line(aes(group=nestbox_factor), alpha = .6, size=0.3, position=position_dodge(0))+
+  geom_boxplot(data = data.sex.2 %>% filter(sex == "Female"),
+               aes(x=sex, y=H),
+               position = position_nudge(x = -0.3),outlier.shape = NA, width = .3, 
+               alpha = .8, colour="black", fill = "grey") + 
+  geom_boxplot(data = data.sex.2 %>% filter(sex == "Male"),
+               aes(x=sex, y=H),
+               position = position_nudge(x = 0.3),outlier.shape = NA, width = .3, 
+               alpha = .8, colour="black", fill = "grey8") +
+  scale_x_discrete(labels=c("Female","Male")) +
+  labs(x="", y="Shannon diversity") +
+  theme(axis.title.y=element_text(size=14, 
+                                  margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=14))
+plot.H.sex
+```
+
+### Proportion of high-volatility substances
+
+Fit the model
+```{r}
+glmm.sex.highvolatility <- lme4::lmer(prop.highvolatility ~ sex + (1|nestbox_factor), 
+                                               data = data.sex.2)
+summary(glmm.sex.highvolatility)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.sex.highvolatility, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(prop.highvolatility ~ sex +
+                                            (1|nestbox_factor), data = data.sex.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.sex.highvolatility, nboot = 1000)
+```
+
+Get the repeatability (with confidence interval) of the random effect
+```{r}
+rpt(prop.highvolatility ~ sex + (1|nestbox_factor), 
+                                   grname = "nestbox_factor", 
+                                   data = data.sex.2, datatype = "Gaussian", 
+                                   nboot = 1000, npermut = 1000, 
+                                   adjusted = TRUE)
+```
+
+Check the model assumptions
+```{r}
+check_model(glmm.sex.highvolatility)
+```
+
+Control for concentration
+```{r}
+summary(lmerTest::lmer(prop.highvolatility ~ abundance_mostcommonpeak                                                + sex + (1|nestbox_factor), data = data.sex.2))
+```
+
+Boxplot the sex difference (within pairs) in the proportion of high-volatility substances
+```{r}
+theme_set(theme_classic())
+plot.prophighvolatility.sex <- ggplot(data = data.sex.2, aes(x=sex, y=prop.highvolatility)) +
+  geom_point(data = data.sex.2, size = 1.3, shape = 16,alpha = .8, 
+             position = position_dodge(width = 0), show.legend = T,) +
+  geom_line(aes(group=nestbox_factor), alpha = .6, size=0.3, position=position_dodge(0))+
+  geom_boxplot(data = data.sex.2 %>% filter(sex == "Female"),
+               aes(x=sex, y=prop.highvolatility),
+               position = position_nudge(x = -0.3),outlier.shape = NA, width = .3, alpha = .8,
+               colour="black",fill="grey") + 
+  geom_boxplot(data = data.sex.2 %>% filter(sex == "Male"),
+               aes(x=sex, y=prop.highvolatility),
+               position = position_nudge(x = 0.3),outlier.shape = NA, width = .3, alpha = .8,
+               colour="black", fill = "grey9") +
+  scale_x_discrete(labels=c("Female","Male")) +
+  labs(x="", y="Proportion of high-volatility substances (%)") +
+  theme(axis.title.y=element_text(size=14, margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=14))
+plot.prophighvolatility.sex
+```
+
+### Proportion of low-volatility substances
+
+Fit the model
+```{r}
+glmm.sex.lowvolatility <- lme4::lmer(prop.lowvolatility ~ sex + (1|nestbox_factor), 
+                                             data = data.sex.2)
+summary(glmm.sex.lowvolatility)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.sex.lowvolatility, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(prop.lowvolatility ~ sex + (1|nestbox_factor), 
+                       data = data.sex.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.sex.lowvolatility, nboot = 1000)
+```
+
+Get the repeatability (with condidence interval) of the random effect
+```{r}
+rpt(prop.lowvolatility ~ sex + (1|nestbox_factor), 
+                              grname = "nestbox_factor", 
+                              data = data.sex.2, datatype = "Gaussian", 
+                              nboot = 1000, npermut = 1000, 
+                              adjusted = TRUE)
+```
+
+Check the model assumptions
+```{r}
+check_model(glmm.sex.lowvolatility)
+```
+
+
+## Season and pair analysis
+
+We test for seasonal differences (incubation *vs* nestling rearing) within individual females.
+
+### Richness (S)
+
+Fit the model
+```{r}
+glmm.season.S <- lme4::lmer(S ~ breeding_stage + (1|ringnr), data = data.season.2)
+summary(glmm.season.S)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.season.S, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(S ~ breeding_stage + (1|ringnr), data = data.season.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.season.S, nboot = 1000)
+```
+
+Get the repeatability of the random effect
+```{r}
+rpt(S ~ breeding_stage + (1|ringnr), 
+                    grname = "ringnr", 
+                    data = data.season.2, datatype = "Gaussian", 
+                    nboot = 1000, npermut = 1000, 
+                    adjusted = TRUE)
+```
+
+Check the model assumptions 
+```{r}
+check_model(glmm.season.S)
+```
+
+### Diversity (H)
+
+Fit the model
+```{r}
+glmm.season.H <- lme4::lmer(H ~ breeding_stage + (1|ringnr), data = data.season.2)
+summary(glmm.season.H)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.season.H, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(H ~ breeding_stage + (1|ringnr), data = data.season.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.season.H, nboot = 1000)
+```
+
+Get the repeatability (with confidence interval) of the random effect
+```{r}
+rpt(H ~ breeding_stage + (1|ringnr), 
+                    grname = "ringnr", 
+                    data = data.season.2, datatype = "Gaussian", 
+                    nboot = 1000, npermut = 1000, 
+                    adjusted = TRUE)
+```
+
+Check model assumptions
+```{r}
+check_model(glmm.season.H) 
+```
+
+### Proportion of high-volatility substances
+
+Fit the model
+```{r}
+glmm.season.highvolatility <- lme4::lmer(prop.highvolatility ~ breeding_stage + 
+                                              (1|ringnr), data = data.season.2)
+summary(glmm.season.highvolatility)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.season.highvolatility, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(prop.highvolatility ~ breeding_stage + (1|ringnr), 
+                                             data = data.season.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.season.highvolatility, nboot = 1000)
+```
+
+Get the repeatability (with confidence interval) of the random effect
+```{r}
+rpt(prop.highvolatility ~ breeding_stage + (1|ringnr), 
+                                 grname = "ringnr", 
+                                 data = data.season.2, datatype = "Gaussian", 
+                                 nboot = 1000, npermut = 1000, 
+                                 adjusted = TRUE)
+```
+
+Check the model assumptions 
+```{r}
+check_model(glmm.season.highvolatility) 
+```
+
+### Proportion of low-volatility substances
+
+Fit the model
+```{r}
+glmm.season.lowvolatility <- lme4::lmer(prop.lowvolatility ~ 
+                                       breeding_stage + (1|ringnr), 
+                                       data = data.season.2)
+summary(glmm.season.lowvolatility)
+```
+
+Get the beta estimate (with confidence interval) of the fixed effect
+```{r}
+tidy(glmm.season.lowvolatility, conf.int = TRUE, conf.method = 'boot')
+```
+
+Get the P-value of the fixed effect
+```{r}
+summary(lmerTest::lmer(prop.lowvolatility ~ breeding_stage + (1|ringnr), 
+                                            data = data.season.2))
+```
+
+Get the marginal R² (with confidence interval) of the fixed effect
+```{r}
+partR2(glmm.season.lowvolatility, nboot = 1000)
+```
+
+Get the repeatability (with confidence interval) of the random effect
+```{r}
+rpt(prop.lowvolatility ~ breeding_stage + (1|ringnr), 
+                                grname = "ringnr", 
+                                data = data.season.2, datatype = "Gaussian", 
+                                nboot = 1000, npermut = 1000, 
+                                adjusted = TRUE)
+```
+
+Control for concentration
+```{r}
+summary(lmerTest::lmer(prop.lowvolatility ~ abundance_mostcommonpeak +
+                                            breeding_stage + (1|ringnr), 
+                                            data = data.season.2))
+```
+
+Boxplot the change across breeding stages (within individual females) in the proportion of low-volatility substances
+```{r}
+theme_set(theme_classic())
+plot.proplowvolatility.season <- ggplot(data = data.season.2, aes(x=breeding_stage, y=prop.lowvolatility)) +
+  geom_point(data = data.season.2, size = 1.3, shape = 16,alpha = .8, position = position_dodge(width = 0), show.legend = T,) +
+  geom_line(aes(group=ringnr), alpha = .6, size=0.3, position=position_dodge(0))+
+  geom_boxplot(data = data.season.2 %>% filter(breeding_stage == "Before"),
+               aes(x=breeding_stage, y=prop.lowvolatility),
+               position = position_nudge(x = -0.3),outlier.shape = NA, width = .3, alpha = .8,
+               colour="black",fill="#66cdff") + 
+  geom_boxplot(data = data.season.2 %>% filter(breeding_stage == "After"),
+               aes(x=breeding_stage, y=prop.lowvolatility),
+               position = position_nudge(x = 0.3),outlier.shape = NA, width = .3, alpha = .8,
+               colour="black", fill = "#97704d") +
+  scale_x_discrete(labels=c("Incubation","Nestling rearing")) +
+  labs(x="", y="Proportion of low-volatility substances (%)") +
+  theme(axis.title.y=element_text(size=14, margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.text.y = element_text(size=12),
+        axis.text.x = element_text(size=14))
+plot.proplowvolatility.season
+```
+
+
+
+
+
+
+
+
+
+
