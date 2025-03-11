@@ -3,6 +3,10 @@
 
 ##### Marc Gilles, Rienk W. Fokkema, Peter Korsten, Barbara A. Caspers & Tim Schmoll
 
+**Related article:** Gilles, M., Fokkema, R. W., Korsten, P., Caspers, B. A., & Schmoll, T. (2024). 
+Preen oil composition of Pied Flycatchers is similar between partners but differs between sexes and breeding stages. *Ibis*, 166(1), 171-186.
+<https://doi.org/10.1111/ibi.13246>
+
 -----
 
 ### Overview of the repository content
